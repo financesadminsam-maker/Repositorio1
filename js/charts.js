@@ -148,3 +148,23 @@ export function savingsPlanLine(id, plan, saved) {
     },
   });
 }
+
+export function simulationChart(id, res) {
+  const labels = res.weeks.map((w) => w.start.slice(5).split('-').reverse().join('/'));
+  mount(id, {
+    data: {
+      labels,
+      datasets: [
+        { type: 'bar', label: 'Ingresos', data: res.weeks.map((w) => disp(w.income + w.extraIncome)), backgroundColor: css('--income'), borderRadius: 5, maxBarThickness: 22, order: 2 },
+        { type: 'bar', label: 'Gastos', data: res.weeks.map((w) => disp(w.fixed + w.variable)), backgroundColor: css('--expense'), borderRadius: 5, maxBarThickness: 22, order: 2 },
+        { type: 'line', label: 'Saldo', data: res.weeks.map((w) => disp(w.balance)), borderColor: css('--accent'), backgroundColor: css('--accent'), tension: 0.3, pointRadius: 2, order: 1 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, boxHeight: 10 } }, tooltip: tooltipMoney },
+      scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 12 } }, y: { ticks: { callback: tick, maxTicksLimit: 6 } } },
+    },
+  });
+}

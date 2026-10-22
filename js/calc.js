@@ -178,10 +178,11 @@ function nextDate(date, frequency, everyDays) {
 }
 
 // Un recurrente es temporal si tiene fechas elegidas a mano o un número de pagos.
-export const isTemporary = (rec) => rec.frequency === 'fechas' || Number(rec.count) > 0 || Boolean(rec.endDate);
+export const isTemporary = (rec) => rec.frequency === 'fechas' || rec.frequency === 'una' || Number(rec.count) > 0 || Boolean(rec.endDate);
 
 // Fechas (y monto de cada pago) de un recurrente hasta `until`, inclusive.
 export function occurrences(rec, until) {
+  if (rec.frequency === 'una') return rec.startDate && rec.startDate <= until ? [{ date: rec.startDate, amount: Number(rec.amount) || 0 }] : [];
   if (rec.frequency === 'fechas') {
     return (rec.schedule || [])
       .filter((p) => p.date && p.date <= until)

@@ -3,6 +3,7 @@ import * as calc from './calc.js';
 import * as charts from './charts.js';
 import * as csv from './csv.js';
 import { renderModal, closeModal, toast, esc, $, $$ } from './ui.js';
+import * as sim from './simulator.js';
 
 const { fmt, today, monthKey } = calc;
 
@@ -17,6 +18,7 @@ const NAV = [
   { view: 'inicio', ico: '🏠', label: 'Inicio' },
   { view: 'movimientos', ico: '📋', label: 'Movimientos' },
   { view: 'metas', ico: '🎯', label: 'Metas' },
+  { view: 'simulador', ico: '🧪', label: 'Simulador' },
   { view: 'analisis', ico: '📊', label: 'Análisis' },
   { view: 'ajustes', ico: '⚙️', label: 'Ajustes' },
 ];
@@ -50,9 +52,11 @@ function renderNav() {
     (n) => `<button class="nav-item ${state.view === n.view ? 'active' : ''}" data-action="go" data-view="${n.view}"><span class="ico">${n.ico}</span>${n.label}</button>`
   ).join('');
   $('#side-nav').innerHTML = side;
-  const b = NAV.slice(0, 4);
+  // En el celular, Metas y Simulador comparten pestaña (se cambia arriba de la vista).
+  const b = NAV.filter((n) => ['inicio', 'movimientos', 'metas', 'analisis'].includes(n.view));
+  const isActive = (v) => state.view === v || (v === 'metas' && state.view === 'simulador');
   const item = (n) =>
-    `<button class="nav-item ${state.view === n.view ? 'active' : ''}" data-action="go" data-view="${n.view}"><span class="ico">${n.ico}</span>${n.label}</button>`;
+    `<button class="nav-item ${isActive(n.view) ? 'active' : ''}" data-action="go" data-view="${n.view}"><span class="ico">${n.ico}</span>${n.label}</button>`;
   $('#bottom-nav').innerHTML = `${item(b[0])}${item(b[1])}<button class="fab" data-action="new-tx" aria-label="Nuevo movimiento">＋</button>${item(b[2])}${item(b[3])}`;
 
   $('#month-label').textContent = calc.monthName(state.month);
@@ -66,13 +70,13 @@ function renderNav() {
 function render() {
   charts.destroyAll();
   renderNav();
-  const views = { inicio: viewInicio, movimientos: viewMovimientos, metas: viewMetas, analisis: viewAnalisis, ajustes: viewAjustes };
+  const views = { inicio: viewInicio, movimientos: viewMovimientos, metas: viewMetas, simulador: sim.viewSimulador, analisis: viewAnalisis, ajustes: viewAjustes };
   const fn = views[state.view] || viewInicio;
   $('#view').innerHTML = fn();
   afterRender[state.view]?.();
 }
 
-const afterRender = {};
+const afterRender = { simulador: () => sim.afterSimulador() };
 
 // ---------- Componentes ----------
 
@@ -357,6 +361,7 @@ function viewMetas() {
   const active = goals.filter((g) => !g.completed);
   const done = goals.filter((g) => g.completed);
   return `<div class="stack">
+    ${sim.planTabs('metas')}
     <div class="card">
       <div class="card-head"><div><h2>🛒 ¿Cuánto me falta para comprarlo?</h2><div class="small muted">Calcula cuánto ahorrar y en cuánto tiempo, según lo que ganas y gastas.</div></div></div>
       <div class="form-grid">
@@ -965,11 +970,27 @@ function accountModal(a = null) {
   );
 }
 
-function recurringModal(r = null, preset = {}) {
+function recurringModal(r = null, preset = {}, opts = {}) {
+  const kind = opts.kind || 'recurring';
+  const sim = kind === 'simItems';
+  const freqs = sim ? { una: 'Una sola vez, en una fecha', ...FREQ_ALL } : FREQ_ALL;
+  const groups = [...new Set(store.list('simItems').map((x) => x.group).filter(Boolean))];
   const accounts = store.list('accounts');
   const item = r
     ? { ...r, schedule: [...(r.schedule || [])] }
-    : { name: '', type: 'gasto', amount: '', currency: 'MXN', categoryId: null, accountId: accounts[0]?.id, frequency: preset.frequency || 'mensual', startDate: today(), active: true, schedule: [] };
+    : {
+        name: '',
+        type: preset.type || 'gasto',
+        amount: '',
+        currency: 'MXN',
+        categoryId: null,
+        accountId: accounts[0]?.id,
+        frequency: preset.frequency || 'mensual',
+        startDate: preset.startDate || today(),
+        group: preset.group || '',
+        active: true,
+        schedule: [],
+      };
   if (item.frequency === 'fechas' && !item.schedule.length) item.schedule = [{ date: today(), amount: '' }];
   const catOptions = (type) =>
     store
@@ -979,18 +1000,27 @@ function recurringModal(r = null, preset = {}) {
       .join('');
   const t = today();
   renderModal(
-    `<div class="modal-head"><h2>${r ? 'Editar gasto fijo o temporal' : item.frequency === 'fechas' ? 'Nuevo pago temporal' : 'Nuevo gasto fijo'}</h2><button class="icon-btn" data-close>✕</button></div>
+    `<div class="modal-head"><h2>${
+      sim ? (r ? 'Editar movimiento simulado' : item.type === 'ingreso' ? 'Ingreso supuesto' : 'Gasto supuesto') : r ? 'Editar gasto fijo o temporal' : item.frequency === 'fechas' ? 'Nuevo pago temporal' : 'Nuevo gasto fijo'
+    }</h2><button class="icon-btn" data-close>✕</button></div>
     <div class="form-grid">
       <label class="field full"><span>Nombre</span><input class="input" id="r-name" value="${esc(item.name)}" placeholder="Ej. Comida de los gatos, aire acondicionado, deuda con Juan" /></label>
+      ${
+        sim
+          ? `<label class="field full"><span>Grupo (opcional, para sumar varios juntos)</span><input class="input" id="r-group" list="r-groups" value="${esc(item.group || '')}" placeholder="Ej. Gastos de la semana, Mascotas" /><datalist id="r-groups">${groups
+              .map((g) => `<option value="${esc(g)}"></option>`)
+              .join('')}</datalist></label>`
+          : ''
+      }
       <label class="field"><span>Tipo</span><select class="input" id="r-type"><option value="gasto" ${item.type === 'gasto' ? 'selected' : ''}>Gasto</option><option value="ingreso" ${item.type === 'ingreso' ? 'selected' : ''}>Ingreso</option></select></label>
       <label class="field"><span>Categoría</span><select class="input" id="r-cat">${catOptions(item.type)}</select></label>
-      <label class="field full"><span>¿Cuándo se paga?</span><select class="input" id="r-freq">${Object.entries(FREQ_ALL).map(([k, v]) => `<option value="${k}" ${item.frequency === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="field full"><span>¿Cuándo se paga?</span><select class="input" id="r-freq">${Object.entries(freqs).map(([k, v]) => `<option value="${k}" ${item.frequency === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
 
       <div class="full form-grid" id="r-regular" style="grid-template-columns:inherit">
         <label class="field"><span>Monto de cada pago</span><input class="input" id="r-amount" type="number" step="0.01" min="0" value="${item.frequency === 'fechas' ? '' : item.amount}" /></label>
         <label class="field ${item.frequency === 'dias' ? '' : 'hidden'}" id="r-days-wrap"><span>¿Cada cuántos días?</span><input class="input" id="r-days" type="number" inputmode="numeric" min="1" value="${Number(item.everyDays) || 5}" /></label>
-        <label class="field"><span>Primera fecha</span><input class="input" id="r-start" type="date" value="${item.startDate}" ${r?.lastGenerated && r.frequency !== 'fechas' ? 'disabled' : ''} /></label>
-        <label class="field"><span>Número de pagos (vacío = sin fin)</span><input class="input" id="r-count" type="number" inputmode="numeric" min="1" placeholder="Sin fin" value="${Number(item.count) || ''}" /></label>
+        <label class="field"><span id="r-start-label">Primera fecha</span><input class="input" id="r-start" type="date" value="${item.startDate}" ${r?.lastGenerated && r.frequency !== 'fechas' ? 'disabled' : ''} /></label>
+        <label class="field" id="r-count-wrap"><span>Número de pagos (vacío = sin fin)</span><input class="input" id="r-count" type="number" inputmode="numeric" min="1" placeholder="Sin fin" value="${Number(item.count) || ''}" /></label>
         <div class="full small" id="r-regular-total"></div>
       </div>
 
@@ -1010,9 +1040,13 @@ function recurringModal(r = null, preset = {}) {
       </div>
 
       <label class="field"><span>Moneda</span><select class="input" id="r-currency"><option ${item.currency === 'MXN' ? 'selected' : ''}>MXN</option><option ${item.currency === 'USD' ? 'selected' : ''}>USD</option></select></label>
-      <label class="field"><span>Cuenta</span><select class="input" id="r-account">${accounts.map((a) => `<option value="${a.id}" ${item.accountId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
+      <label class="field ${sim ? 'hidden' : ''}"><span>Cuenta</span><select class="input" id="r-account">${accounts.map((a) => `<option value="${a.id}" ${item.accountId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
       <label class="field full"><span>Estado</span><select class="input" id="r-active"><option value="1" ${item.active !== false ? 'selected' : ''}>Activo</option><option value="0" ${item.active === false ? 'selected' : ''}>Pausado</option></select></label>
-      <div class="tiny muted full">Cada pago se registra solo cuando llega su fecha, y los que faltan se descuentan en tus metas y presupuestos en la semana en que caen.</div>
+      <div class="tiny muted full">${
+        sim
+          ? 'Esto es solo para el simulador: no se registra en tus movimientos ni cambia tus metas.'
+          : 'Cada pago se registra solo cuando llega su fecha, y los que faltan se descuentan en tus metas y presupuestos en la semana en que caen.'
+      }</div>
     </div>
     <div class="modal-actions">${r ? `<button class="btn btn-danger" id="r-delete">Eliminar</button>` : ''}<button class="btn btn-primary" id="r-save">Guardar</button></div>`,
     (root) => {
@@ -1038,6 +1072,8 @@ function recurringModal(r = null, preset = {}) {
         $('#r-regular', root).classList.toggle('hidden', f === 'fechas');
         $('#r-fechas', root).classList.toggle('hidden', f !== 'fechas');
         $('#r-days-wrap', root).classList.toggle('hidden', f !== 'dias');
+        $('#r-count-wrap', root).classList.toggle('hidden', f === 'una');
+        $('#r-start-label', root).textContent = f === 'una' ? 'Fecha' : 'Primera fecha';
         if (f === 'fechas' && !item.schedule.length) {
           item.schedule = [{ date: t, amount: '' }];
           renderSchedule();
@@ -1088,7 +1124,7 @@ function recurringModal(r = null, preset = {}) {
       };
       $('#r-delete', root)?.addEventListener('click', () => {
         if (confirm('¿Eliminar? Los movimientos ya registrados se conservan.')) {
-          store.remove('recurring', r.id);
+          store.remove(kind, r.id);
           closeModal();
         }
       });
@@ -1105,6 +1141,7 @@ function recurringModal(r = null, preset = {}) {
           currency: cur(),
           accountId: $('#r-account', root).value,
           active: $('#r-active', root).value === '1',
+          group: sim ? $('#r-group', root).value.trim() : item.group,
         };
         let saved;
         if (frequency === 'fechas') {
@@ -1120,10 +1157,14 @@ function recurringModal(r = null, preset = {}) {
             schedule: undefined,
             everyDays: frequency === 'dias' ? Math.max(1, Number($('#r-days', root).value) || 1) : undefined,
             startDate: $('#r-start', root).value || t,
-            count: Number($('#r-count', root).value) > 0 ? Math.round(Number($('#r-count', root).value)) : undefined,
+            count: frequency !== 'una' && Number($('#r-count', root).value) > 0 ? Math.round(Number($('#r-count', root).value)) : undefined,
           };
         }
-        store.save('recurring', saved);
+        store.save(kind, saved);
+        if (sim) {
+          closeModal();
+          return toast('Agregado al simulador 🧪');
+        }
         const n = calc.generateRecurring();
         closeModal();
         toast(n ? `Guardado. Se registraron ${n} pagos que ya tocaban.` : 'Guardado ✅');
@@ -1340,6 +1381,7 @@ const actions = {
   'edit-account': (el) => accountModal(store.get('accounts', el.dataset.id)),
   'new-recurring': () => recurringModal(),
   'new-temporary': () => recurringModal(null, { frequency: 'fechas' }),
+  ...sim.simActions((...args) => recurringModal(...args)),
   'edit-recurring': (el) => recurringModal(store.get('recurring', el.dataset.id)),
   'new-goal': () => goalModal(),
   'edit-goal': (el) => goalModal(store.get('goals', el.dataset.id)),

@@ -11,6 +11,7 @@ Página web personal para llevar registro de ingresos y gastos, hacer presupuest
 - **Gastos fijos y pagos temporales**: renta, Netflix o comida de los gatos cada N días; pagos a plazos con número de pagos o deudas con fechas elegidas. Se registran solos y las metas descuentan cada pago en la semana en que cae.
 - **Presupuesto de compra**: cuánto ahorrar y en cuántas semanas, con tres escenarios (semana floja, promedio y buena) según tu historial.
 - **Metas de ahorro** con barra de progreso.
+- **Simulador**: ingresos supuestos por semana, gastos individuales, agrupados y temporales, en periodos de semana, mes, varios meses o año. Cuenta cada gasto fijo en las fechas exactas en que cae.
 - **Análisis**: resumen del mes vs. el anterior, gráficas mensuales y semanales, proyección a 6 meses.
 - **Importar CSV** del banco (detecta columnas, categorías y duplicados) y **exportar** a Excel, CSV o respaldo JSON.
 - **Copiar resumen** en texto para pegárselo a Claude.

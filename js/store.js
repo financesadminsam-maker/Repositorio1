@@ -4,7 +4,7 @@
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from './config.js';
 
 const LS_KEY = 'finanzas.v1';
-const KINDS = ['accounts', 'categories', 'transactions', 'recurring', 'goals'];
+const KINDS = ['accounts', 'categories', 'transactions', 'recurring', 'goals', 'simItems'];
 
 export const uid = () =>
   (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
@@ -47,6 +47,7 @@ function defaultData() {
     transactions: [],
     recurring: [],
     goals: [],
+    simItems: [], // ingresos y gastos supuestos del simulador (no son movimientos reales)
     meta: { lastPull: null, dirty: {} },
   };
 }

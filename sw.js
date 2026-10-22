@@ -1,7 +1,7 @@
 // Service worker: permite abrir la app sin internet.
 // Estrategia "primero la red": siempre intenta la versión más nueva y,
 // si no hay conexión, usa la copia guardada.
-const CACHE = 'finanzas-v4';
+const CACHE = 'finanzas-v5';
 const SHELL = [
   './',
   'index.html',
@@ -12,6 +12,7 @@ const SHELL = [
   'js/calc.js',
   'js/charts.js',
   'js/csv.js',
+  'js/simulator.js',
   'js/config.js',
   'vendor/chart.umd.js',
   'vendor/supabase.js',
