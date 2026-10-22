@@ -205,7 +205,7 @@ export async function signIn(email, password) {
 
 export async function signUp(email, password) {
   if (!client) throw new Error('Supabase no está configurado');
-  const { error } = await client.auth.signUp({ email, password });
+  const { error } = await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname } });
   if (error) throw error;
 }
 
