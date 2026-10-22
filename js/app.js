@@ -23,7 +23,19 @@ const NAV = [
 
 const ACCOUNT_TYPES = { efectivo: '💵 Efectivo', debito: '💳 Débito', credito: '💳 Crédito', ahorro: '🏦 Ahorro', otro: '👛 Otro' };
 const FREQ = { dias: 'Cada cierto número de días', semanal: 'Cada semana', quincenal: 'Cada 2 semanas', mensual: 'Cada mes', anual: 'Cada año' };
-const freqLabel = (r) => (r.frequency === 'dias' ? `Cada ${Number(r.everyDays) || 1} ${Number(r.everyDays) === 1 ? 'día' : 'días'}` : FREQ[r.frequency]);
+const FREQ_ALL = { ...FREQ, fechas: 'En fechas que yo elija (deuda o pagos a plazos)' };
+function freqLabel(r) {
+  const base =
+    r.frequency === 'fechas'
+      ? 'Fechas elegidas'
+      : r.frequency === 'dias'
+        ? `Cada ${Number(r.everyDays) || 1} ${Number(r.everyDays) === 1 ? 'día' : 'días'}`
+        : FREQ[r.frequency];
+  const pr = calc.recurringProgress(r);
+  if (!pr) return base;
+  if (!pr.left) return `${base} · ✅ liquidado (${pr.total} pagos)`;
+  return `${base} · faltan ${pr.left} de ${pr.total} pagos (${calc.money(pr.leftAmount, { currency: r.currency })}) · próximo ${calc.formatDate(pr.next.date)}`;
+}
 const COLORS = ['#f97316', '#facc15', '#a3e635', '#4ade80', '#34d399', '#22d3ee', '#38bdf8', '#60a5fa', '#818cf8', '#a78bfa', '#e879f9', '#f472b6', '#fb7185', '#94a3b8'];
 
 const cat = (id) => store.get('categories', id) || { name: 'Sin categoría', icon: '❔', color: '#64748b' };
@@ -229,7 +241,7 @@ function viewInicio() {
                   (u) => `<div class="list-item"><span class="cat-ico" style="background:${soft(cat(u.rec.categoryId).color)}">${cat(u.rec.categoryId).icon}</span><span class="grow"><div class="li-title">${esc(
                     u.rec.name
                   )}</div><div class="li-sub">${calc.formatDate(u.date)}</div></span><span class="li-amount ${u.rec.type === 'ingreso' ? 'income' : 'expense'}">${fmt(
-                    (u.rec.type === 'ingreso' ? 1 : -1) * calc.toMXN(u.rec.amount, u.rec.currency),
+                    (u.rec.type === 'ingreso' ? 1 : -1) * calc.toMXN(u.amount, u.rec.currency),
                     { sign: u.rec.type === 'ingreso' }
                   )}</span></div>`
                 )
@@ -257,7 +269,7 @@ function upcomingRecurring(days) {
   const out = [];
   for (const rec of store.list('recurring')) {
     if (rec.active === false) continue;
-    for (const d of calc.occurrences(rec, until)) if (d > from) out.push({ rec, date: d });
+    for (const o of calc.occurrences(rec, until)) if (o.date > from) out.push({ rec, date: o.date, amount: o.amount });
   }
   return out.sort((a, b) => (a.date < b.date ? -1 : 1)).slice(0, 6);
 }
@@ -381,8 +393,12 @@ function viewMetas() {
 function fixedExpensesCard() {
   const recs = store.list('recurring').filter((r) => r.type === 'gasto');
   const weekly = (calc.recurringMonthlyMXN('gasto') * 12) / 52;
+  const temps = recs.filter((r) => r.active !== false && calc.isTemporary(r));
   return `<div class="card">
-    <div class="card-head"><div><h2>🔄 Mis gastos fijos</h2><div class="small muted">Se descuentan solos en los cálculos de arriba${recs.length ? `: ${fmt(weekly)} por semana en total` : ''}.</div></div><button class="btn btn-sm" data-action="new-recurring">＋ Agregar</button></div>
+    <div class="card-head"><div><h2>🔄 Gastos fijos y pagos temporales</h2><div class="small muted">Se descuentan solos en los cálculos de arriba${weekly ? `. Fijos: ${fmt(weekly)} por semana` : ''}${
+      temps.length ? `. Temporales pendientes: ${fmt(temps.reduce((s, r) => s + calc.toMXN(calc.recurringProgress(r).leftAmount, r.currency), 0))}` : ''
+    }.</div></div></div>
+    <div class="row wrap" style="margin-bottom:8px"><button class="btn btn-sm" data-action="new-recurring">＋ Gasto fijo</button><button class="btn btn-sm" data-action="new-temporary">＋ Pago temporal o deuda</button></div>
     ${
       recs.length
         ? `<div class="list">${recs
@@ -392,7 +408,7 @@ function fixedExpensesCard() {
               )}${r.active === false ? ' <span class="chip">pausado</span>' : ''}</div><div class="li-sub">${freqLabel(r)}</div></span><span class="li-amount expense">${calc.money(Number(r.amount), { currency: r.currency })}</span></button>`
             )
             .join('')}</div>`
-        : emptyState('🐱', 'Agrega lo que pagas seguido, como la comida de los gatos ($80 cada 5 días), Netflix o la renta.')
+        : emptyState('🐱', 'Agrega lo que pagas seguido (comida de los gatos $80 cada 5 días) o pagos temporales (el aire acondicionado: 2 pagos de $600).')
     }
   </div>`;
 }
@@ -420,7 +436,7 @@ function renderPlanResult() {
             s.weeks
           )}</div><div class="small">${
             Number.isFinite(s.weeks) && s.weeks > 0
-              ? `Ahorrando ${fmt(s.surplus)} por semana · listo el ${calc.formatDate(s.date)}`
+              ? `Ahorrando ${fmt(s.surplus)} por semana${s.temporary > 0 ? `, menos ${fmt(s.temporary)} de pagos temporales` : ''} · listo el ${calc.formatDate(s.date)}`
               : s.weeks === 0
                 ? 'Ya tienes lo necesario.'
                 : `Gastas más de lo que ganas (${fmt(s.surplus)}/sem)`
@@ -432,7 +448,9 @@ function renderPlanResult() {
       t
         ? `<div class="alert ${t.feasible ? 'ok' : 'warn'}" style="margin-top:12px"><span>${t.feasible ? '✅' : '⚠️'}</span><span>Para tenerlo en <b>${t.weeks} semanas</b> (${calc.formatDate(
             t.date
-          )}) necesitas apartar <b>${fmt(t.perWeek)} por semana</b> (${fmt(t.perDay)} al día${t.pctOfIncome != null ? `, ${Math.round(t.pctOfIncome * 100)}% de tu ingreso promedio` : ''}). ${
+          )}) necesitas apartar <b>${fmt(t.perWeek)} por semana</b> (${fmt(t.perDay)} al día${t.pctOfIncome != null ? `, ${Math.round(t.pctOfIncome * 100)}% de tu ingreso promedio` : ''}).${
+            t.temporary > 0 ? ` En ese tiempo también te tocan ${fmt(t.temporary)} de pagos temporales.` : ''
+          } ${
             t.feasible ? 'Te alcanza con tu ritmo actual.' : `Tendrías que recortar unos <b>${fmt(t.cutNeeded)} por semana</b> de tus gastos.`
           }</span></div>`
         : ''
@@ -947,60 +965,168 @@ function accountModal(a = null) {
   );
 }
 
-function recurringModal(r = null) {
+function recurringModal(r = null, preset = {}) {
   const accounts = store.list('accounts');
-  const item = r ? { ...r } : { name: '', type: 'gasto', amount: '', currency: 'MXN', categoryId: null, accountId: accounts[0]?.id, frequency: 'mensual', startDate: today(), active: true };
+  const item = r
+    ? { ...r, schedule: [...(r.schedule || [])] }
+    : { name: '', type: 'gasto', amount: '', currency: 'MXN', categoryId: null, accountId: accounts[0]?.id, frequency: preset.frequency || 'mensual', startDate: today(), active: true, schedule: [] };
+  if (item.frequency === 'fechas' && !item.schedule.length) item.schedule = [{ date: today(), amount: '' }];
   const catOptions = (type) =>
     store
       .list('categories')
       .filter((c) => c.type === type)
       .map((c) => `<option value="${c.id}" ${item.categoryId === c.id ? 'selected' : ''}>${c.icon} ${esc(c.name)}</option>`)
       .join('');
+  const t = today();
   renderModal(
-    `<div class="modal-head"><h2>${r ? 'Editar recurrente' : 'Nuevo recurrente'}</h2><button class="icon-btn" data-close>✕</button></div>
+    `<div class="modal-head"><h2>${r ? 'Editar gasto fijo o temporal' : item.frequency === 'fechas' ? 'Nuevo pago temporal' : 'Nuevo gasto fijo'}</h2><button class="icon-btn" data-close>✕</button></div>
     <div class="form-grid">
-      <label class="field full"><span>Nombre</span><input class="input" id="r-name" value="${esc(item.name)}" placeholder="Ej. Comida de los gatos, Netflix, renta" /></label>
+      <label class="field full"><span>Nombre</span><input class="input" id="r-name" value="${esc(item.name)}" placeholder="Ej. Comida de los gatos, aire acondicionado, deuda con Juan" /></label>
       <label class="field"><span>Tipo</span><select class="input" id="r-type"><option value="gasto" ${item.type === 'gasto' ? 'selected' : ''}>Gasto</option><option value="ingreso" ${item.type === 'ingreso' ? 'selected' : ''}>Ingreso</option></select></label>
       <label class="field"><span>Categoría</span><select class="input" id="r-cat">${catOptions(item.type)}</select></label>
-      <label class="field"><span>Monto</span><input class="input" id="r-amount" type="number" step="0.01" min="0" value="${item.amount}" /></label>
+      <label class="field full"><span>¿Cuándo se paga?</span><select class="input" id="r-freq">${Object.entries(FREQ_ALL).map(([k, v]) => `<option value="${k}" ${item.frequency === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+
+      <div class="full form-grid" id="r-regular" style="grid-template-columns:inherit">
+        <label class="field"><span>Monto de cada pago</span><input class="input" id="r-amount" type="number" step="0.01" min="0" value="${item.frequency === 'fechas' ? '' : item.amount}" /></label>
+        <label class="field ${item.frequency === 'dias' ? '' : 'hidden'}" id="r-days-wrap"><span>¿Cada cuántos días?</span><input class="input" id="r-days" type="number" inputmode="numeric" min="1" value="${Number(item.everyDays) || 5}" /></label>
+        <label class="field"><span>Primera fecha</span><input class="input" id="r-start" type="date" value="${item.startDate}" ${r?.lastGenerated && r.frequency !== 'fechas' ? 'disabled' : ''} /></label>
+        <label class="field"><span>Número de pagos (vacío = sin fin)</span><input class="input" id="r-count" type="number" inputmode="numeric" min="1" placeholder="Sin fin" value="${Number(item.count) || ''}" /></label>
+        <div class="full small" id="r-regular-total"></div>
+      </div>
+
+      <div class="full stack" id="r-fechas">
+        <div class="card" style="background:var(--surface-2)">
+          <div class="small muted" style="margin-bottom:8px">Atajo: reparte una deuda en pagos iguales</div>
+          <div class="form-grid" style="grid-template-columns:repeat(3,1fr)">
+            <label class="field"><span>Total</span><input class="input" id="q-total" type="number" min="0" placeholder="1800" /></label>
+            <label class="field"><span>Pagos</span><input class="input" id="q-n" type="number" min="1" placeholder="3" /></label>
+            <label class="field"><span>Cada (semanas)</span><input class="input" id="q-every" type="number" min="1" placeholder="1" /></label>
+          </div>
+          <button type="button" class="btn btn-sm" id="q-fill" style="margin-top:10px">Generar fechas</button>
+        </div>
+        <div class="small muted">Pagos (puedes cambiar cada fecha y monto):</div>
+        <div id="r-schedule" class="stack" style="gap:8px"></div>
+        <div class="row between"><button type="button" class="btn btn-sm" id="r-add-pay">＋ Agregar pago</button><b class="num" id="r-sched-total"></b></div>
+      </div>
+
       <label class="field"><span>Moneda</span><select class="input" id="r-currency"><option ${item.currency === 'MXN' ? 'selected' : ''}>MXN</option><option ${item.currency === 'USD' ? 'selected' : ''}>USD</option></select></label>
-      <label class="field"><span>Frecuencia</span><select class="input" id="r-freq">${Object.entries(FREQ).map(([k, v]) => `<option value="${k}" ${item.frequency === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
-      <label class="field ${item.frequency === 'dias' ? '' : 'hidden'}" id="r-days-wrap"><span>¿Cada cuántos días?</span><input class="input" id="r-days" type="number" inputmode="numeric" min="1" value="${Number(item.everyDays) || 5}" /></label>
       <label class="field"><span>Cuenta</span><select class="input" id="r-account">${accounts.map((a) => `<option value="${a.id}" ${item.accountId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
-      <label class="field"><span>Primera fecha</span><input class="input" id="r-start" type="date" value="${item.startDate}" ${r?.lastGenerated ? 'disabled' : ''} /></label>
-      <label class="field"><span>Estado</span><select class="input" id="r-active"><option value="1" ${item.active !== false ? 'selected' : ''}>Activo</option><option value="0" ${item.active === false ? 'selected' : ''}>Pausado</option></select></label>
-      <div class="tiny muted full">Se registra solo cada vez que llega la fecha. Los cambios aplican a los próximos, no a los ya registrados.</div>
+      <label class="field full"><span>Estado</span><select class="input" id="r-active"><option value="1" ${item.active !== false ? 'selected' : ''}>Activo</option><option value="0" ${item.active === false ? 'selected' : ''}>Pausado</option></select></label>
+      <div class="tiny muted full">Cada pago se registra solo cuando llega su fecha, y los que faltan se descuentan en tus metas y presupuestos en la semana en que caen.</div>
     </div>
     <div class="modal-actions">${r ? `<button class="btn btn-danger" id="r-delete">Eliminar</button>` : ''}<button class="btn btn-primary" id="r-save">Guardar</button></div>`,
     (root) => {
+      const cur = () => $('#r-currency', root).value;
+      const renderSchedule = () => {
+        item.schedule.sort((a, b) => (a.date < b.date ? -1 : 1));
+        $('#r-schedule', root).innerHTML = item.schedule
+          .map(
+            (p, i) => `<div class="row"><span class="tiny muted" style="width:18px">${i + 1}</span><input class="input" type="date" data-sd="${i}" value="${p.date}" ${p.date <= t && r?.lastGenerated ? 'title="Ya registrado"' : ''} /><input class="input" type="number" min="0" step="0.01" inputmode="decimal" data-sa="${i}" value="${p.amount}" placeholder="Monto" style="max-width:120px" /><button type="button" class="btn btn-ghost btn-sm" data-sx="${i}">✕</button></div>`
+          )
+          .join('');
+        updateTotals();
+      };
+      const updateTotals = () => {
+        const total = item.schedule.reduce((s, p) => s + (Number(p.amount) || 0), 0);
+        $('#r-sched-total', root).textContent = `Total: ${calc.money(total, { currency: cur() })}`;
+        const amt = Number($('#r-amount', root).value) || 0;
+        const n = Number($('#r-count', root).value) || 0;
+        $('#r-regular-total', root).innerHTML = n && amt ? `Total a pagar: <b>${calc.money(amt * n, { currency: cur() })}</b> en ${n} pagos` : '';
+      };
+      const syncFreq = () => {
+        const f = $('#r-freq', root).value;
+        $('#r-regular', root).classList.toggle('hidden', f === 'fechas');
+        $('#r-fechas', root).classList.toggle('hidden', f !== 'fechas');
+        $('#r-days-wrap', root).classList.toggle('hidden', f !== 'dias');
+        if (f === 'fechas' && !item.schedule.length) {
+          item.schedule = [{ date: t, amount: '' }];
+          renderSchedule();
+        }
+      };
+      renderSchedule();
+      syncFreq();
+      $('#r-freq', root).onchange = syncFreq;
       $('#r-type', root).onchange = (e) => ($('#r-cat', root).innerHTML = catOptions(e.target.value));
-      $('#r-freq', root).onchange = (e) => $('#r-days-wrap', root).classList.toggle('hidden', e.target.value !== 'dias');
+      $('#r-amount', root).oninput = updateTotals;
+      $('#r-count', root).oninput = updateTotals;
+      $('#r-currency', root).onchange = updateTotals;
+      $('#r-schedule', root).addEventListener('input', (e) => {
+        if (e.target.dataset.sa != null) item.schedule[Number(e.target.dataset.sa)].amount = e.target.value;
+        updateTotals();
+      });
+      $('#r-schedule', root).addEventListener('change', (e) => {
+        if (e.target.dataset.sd != null) {
+          item.schedule[Number(e.target.dataset.sd)].date = e.target.value;
+          renderSchedule();
+        }
+      });
+      $('#r-schedule', root).addEventListener('click', (e) => {
+        const x = e.target.closest('[data-sx]');
+        if (!x) return;
+        item.schedule.splice(Number(x.dataset.sx), 1);
+        renderSchedule();
+      });
+      $('#r-add-pay', root).onclick = () => {
+        const last = item.schedule[item.schedule.length - 1];
+        const date = last?.date ? calc.toISODate(calc.addDays(calc.parseDate(last.date), 7)) : t;
+        item.schedule.push({ date, amount: last?.amount || '' });
+        renderSchedule();
+      };
+      $('#q-fill', root).onclick = () => {
+        const total = Number($('#q-total', root).value);
+        const n = Math.max(1, Number($('#q-n', root).value) || 1);
+        const every = Math.max(1, Number($('#q-every', root).value) || 1);
+        if (!(total > 0)) return toast('Escribe el total de la deuda', 'warn');
+        const each = Math.round((total / n) * 100) / 100;
+        const start = item.schedule[0]?.date || t;
+        item.schedule = Array.from({ length: n }, (_, i) => ({
+          date: calc.toISODate(calc.addDays(calc.parseDate(start), 7 * every * i)),
+          // El último pago absorbe los centavos que sobren del redondeo.
+          amount: i === n - 1 ? Math.round((total - each * (n - 1)) * 100) / 100 : each,
+        }));
+        renderSchedule();
+      };
       $('#r-delete', root)?.addEventListener('click', () => {
-        if (confirm('¿Eliminar este recurrente? Los movimientos ya registrados se conservan.')) {
+        if (confirm('¿Eliminar? Los movimientos ya registrados se conservan.')) {
           store.remove('recurring', r.id);
           closeModal();
         }
       });
       $('#r-save', root).onclick = () => {
-        const amount = Number($('#r-amount', root).value);
         const name = $('#r-name', root).value.trim();
-        if (!name || !(amount > 0)) return toast('Pon nombre y monto', 'warn');
-        store.save('recurring', {
+        const frequency = $('#r-freq', root).value;
+        if (!name) return toast('Ponle un nombre', 'warn');
+        const common = {
           ...item,
           name,
-          amount,
+          frequency,
           type: $('#r-type', root).value,
           categoryId: $('#r-cat', root).value,
-          currency: $('#r-currency', root).value,
-          frequency: $('#r-freq', root).value,
-          everyDays: $('#r-freq', root).value === 'dias' ? Math.max(1, Number($('#r-days', root).value) || 1) : undefined,
+          currency: cur(),
           accountId: $('#r-account', root).value,
-          startDate: $('#r-start', root).value || today(),
           active: $('#r-active', root).value === '1',
-        });
+        };
+        let saved;
+        if (frequency === 'fechas') {
+          const schedule = item.schedule.filter((p) => p.date && Number(p.amount) > 0).map((p) => ({ date: p.date, amount: Number(p.amount) }));
+          if (!schedule.length) return toast('Agrega al menos un pago con fecha y monto', 'warn');
+          saved = { ...common, schedule, amount: schedule.reduce((s, p) => s + p.amount, 0), startDate: schedule[0].date, count: undefined, everyDays: undefined };
+        } else {
+          const amount = Number($('#r-amount', root).value);
+          if (!(amount > 0)) return toast('Pon el monto de cada pago', 'warn');
+          saved = {
+            ...common,
+            amount,
+            schedule: undefined,
+            everyDays: frequency === 'dias' ? Math.max(1, Number($('#r-days', root).value) || 1) : undefined,
+            startDate: $('#r-start', root).value || t,
+            count: Number($('#r-count', root).value) > 0 ? Math.round(Number($('#r-count', root).value)) : undefined,
+          };
+        }
+        store.save('recurring', saved);
         const n = calc.generateRecurring();
         closeModal();
-        toast(n ? `Guardado. Se registraron ${n} movimientos pendientes.` : 'Recurrente guardado');
+        toast(n ? `Guardado. Se registraron ${n} pagos que ya tocaban.` : 'Guardado ✅');
       };
     }
   );
@@ -1213,6 +1339,7 @@ const actions = {
   'new-account': () => accountModal(),
   'edit-account': (el) => accountModal(store.get('accounts', el.dataset.id)),
   'new-recurring': () => recurringModal(),
+  'new-temporary': () => recurringModal(null, { frequency: 'fechas' }),
   'edit-recurring': (el) => recurringModal(store.get('recurring', el.dataset.id)),
   'new-goal': () => goalModal(),
   'edit-goal': (el) => goalModal(store.get('goals', el.dataset.id)),

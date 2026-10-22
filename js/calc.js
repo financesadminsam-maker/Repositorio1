@@ -177,18 +177,55 @@ function nextDate(date, frequency, everyDays) {
   return addMonths(date, 1);
 }
 
+// Un recurrente es temporal si tiene fechas elegidas a mano o un número de pagos.
+export const isTemporary = (rec) => rec.frequency === 'fechas' || Number(rec.count) > 0 || Boolean(rec.endDate);
+
+// Fechas (y monto de cada pago) de un recurrente hasta `until`, inclusive.
 export function occurrences(rec, until) {
+  if (rec.frequency === 'fechas') {
+    return (rec.schedule || [])
+      .filter((p) => p.date && p.date <= until)
+      .map((p) => ({ date: p.date, amount: Number(p.amount) || 0 }))
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+  }
   const out = [];
   let d = parseDate(rec.startDate);
   const end = parseDate(until);
   const stop = rec.endDate ? parseDate(rec.endDate) : null;
-  let guard = 0;
-  while (d <= end && guard++ < 1000) {
+  const max = Number(rec.count) > 0 ? Number(rec.count) : 1000;
+  while (d <= end && out.length < max) {
     if (stop && d > stop) break;
-    out.push(toISODate(d));
+    out.push({ date: toISODate(d), amount: Number(rec.amount) || 0 });
     d = nextDate(d, rec.frequency, rec.everyDays);
   }
   return out;
+}
+
+// Avance de un pago temporal: cuántos pagos lleva, cuántos faltan y cuánto.
+export function recurringProgress(rec) {
+  if (!isTemporary(rec)) return null;
+  const all = occurrences(rec, '9999-12-31');
+  const t = today();
+  const paid = all.filter((o) => o.date <= t);
+  const left = all.filter((o) => o.date > t);
+  return {
+    total: all.length,
+    totalAmount: all.reduce((s, o) => s + o.amount, 0),
+    paid: paid.length,
+    left: left.length,
+    leftAmount: left.reduce((s, o) => s + o.amount, 0),
+    next: left[0] || null,
+  };
+}
+
+// Pagos temporales futuros (después de hoy) que caen entre dos fechas, en MXN.
+export function temporaryBetween(fromExclusive, toInclusive, type = 'gasto') {
+  let sum = 0;
+  for (const rec of store.list('recurring')) {
+    if (rec.active === false || rec.type !== type || !isTemporary(rec)) continue;
+    for (const o of occurrences(rec, toInclusive)) if (o.date > fromExclusive) sum += toMXN(o.amount, rec.currency);
+  }
+  return sum;
 }
 
 // Crea los movimientos de los recurrentes que ya tocaban hasta hoy.
@@ -197,13 +234,15 @@ export function generateRecurring() {
   const created = [];
   for (const rec of store.list('recurring')) {
     if (rec.active === false) continue;
-    const dates = occurrences(rec, t).filter((d) => !rec.lastGenerated || d > rec.lastGenerated);
-    if (!dates.length) continue;
-    for (const date of dates) {
+    const due = occurrences(rec, t).filter(
+      (o) => !store.exists('transactions', `rec-${rec.id}-${o.date}`) && (rec.frequency === 'fechas' || !rec.lastGenerated || o.date > rec.lastGenerated)
+    );
+    if (!due.length) continue;
+    for (const { date, amount } of due) {
       created.push({
         id: `rec-${rec.id}-${date}`,
         type: rec.type,
-        amount: rec.amount,
+        amount,
         currency: rec.currency,
         categoryId: rec.categoryId,
         accountId: rec.accountId,
@@ -212,19 +251,20 @@ export function generateRecurring() {
         recurringId: rec.id,
       });
     }
-    store.save('recurring', { ...rec, lastGenerated: dates[dates.length - 1] }, { silent: true });
+    store.save('recurring', { ...rec, lastGenerated: due[due.length - 1].date }, { silent: true });
   }
   if (created.length) store.saveMany('transactions', created);
   return created.length;
 }
 
-// Monto mensual equivalente de los recurrentes de un tipo.
+// Monto mensual equivalente de los recurrentes permanentes de un tipo
+// (los temporales se cuentan aparte, en las semanas en que caen).
 export function recurringMonthlyMXN(type) {
   const factor = (r) =>
     r.frequency === 'dias' ? 365 / 12 / Math.max(1, Number(r.everyDays) || 1) : { semanal: 52 / 12, quincenal: 26 / 12, mensual: 1, anual: 1 / 12 }[r.frequency] || 1;
   return store
     .list('recurring')
-    .filter((r) => r.active !== false && r.type === type)
+    .filter((r) => r.active !== false && r.type === type && !isTemporary(r))
     .reduce((s, r) => s + toMXN(Number(r.amount) || 0, r.currency) * factor(r), 0);
 }
 
@@ -292,27 +332,59 @@ export function purchasePlan({ price, alreadySaved = 0, targetWeeks = null, extr
   const st = weeklyStats();
   const needed = Math.max(0, price - alreadySaved);
   const expense = st.avgExpense + extraWeeklyExpense;
+  const H = 156; // simulamos hasta 3 años
+  // Pagos temporales (deudas, pagos a plazos) que caen en cada una de las próximas semanas.
+  const now = new Date();
+  const temp = Array.from({ length: H + 1 }, (_, i) => {
+    if (i === 0) return { out: 0, in: 0 };
+    const from = toISODate(addDays(now, 7 * (i - 1)));
+    const to = toISODate(addDays(now, 7 * i));
+    return { out: temporaryBetween(from, to, 'gasto'), in: temporaryBetween(from, to, 'ingreso') };
+  });
+  const simulate = (income) => {
+    const path = [0];
+    let cum = 0;
+    let weeks = needed === 0 ? 0 : Infinity;
+    for (let i = 1; i <= H; i++) {
+      cum += income - expense - temp[i].out + temp[i].in;
+      path.push(cum);
+      if (!Number.isFinite(weeks) && cum >= needed) weeks = i;
+    }
+    return { path, weeks };
+  };
+  const tempIn = (w) => temp.slice(1, w + 1).reduce((s, x) => s + x.out - x.in, 0);
   const scenarios = [
     { key: 'malo', label: 'Semana floja', income: Number(s.weeklyMinimum) || st.minIncome },
     { key: 'promedio', label: 'Semana promedio', income: st.avgIncome },
     { key: 'bueno', label: 'Semana buena', income: Math.max(appointmentPay(s.goodWeekAppointments), st.maxIncome) },
   ].map((sc) => {
     const surplus = sc.income - expense;
-    const weeks = needed === 0 ? 0 : surplus > 0 ? Math.ceil(needed / surplus) : Infinity;
-    return { ...sc, expense, surplus, weeks, date: Number.isFinite(weeks) ? toISODate(addDays(new Date(), weeks * 7)) : null };
+    const { path, weeks } = simulate(sc.income);
+    return {
+      ...sc,
+      expense,
+      surplus,
+      weeks,
+      path,
+      temporary: Number.isFinite(weeks) ? tempIn(weeks) : 0,
+      date: Number.isFinite(weeks) ? toISODate(addDays(new Date(), weeks * 7)) : null,
+    };
   });
 
   let target = null;
   if (targetWeeks && targetWeeks > 0) {
-    const perWeek = needed / targetWeeks;
-    const avgSurplus = st.avgIncome - expense;
+    const w = Math.min(targetWeeks, H);
+    const perWeek = needed / w;
+    // Lo que te sobra en esas semanas con tu ritmo promedio, ya descontando pagos temporales.
+    const available = (st.avgIncome - expense) * w - tempIn(w);
     target = {
       weeks: targetWeeks,
       perWeek,
       perDay: perWeek / 7,
       pctOfIncome: st.avgIncome > 0 ? perWeek / st.avgIncome : null,
-      feasible: perWeek <= avgSurplus,
-      cutNeeded: Math.max(0, perWeek - avgSurplus),
+      feasible: available >= needed,
+      cutNeeded: Math.max(0, (needed - available) / w),
+      temporary: tempIn(w),
       date: toISODate(addDays(new Date(), targetWeeks * 7)),
     };
   }
@@ -331,8 +403,14 @@ export function projection(months = 6) {
   let balance = netWorthMXN();
   const out = [];
   for (let i = 1; i <= months; i++) {
-    balance += monthlyIncome - monthlyExpense;
-    out.push({ month: shiftMonthKey(start, i), income: monthlyIncome, expense: monthlyExpense, balance });
+    const month = shiftMonthKey(start, i);
+    const [y, m] = month.split('-').map(Number);
+    const first = toISODate(new Date(y, m - 1, 0)); // último día del mes anterior
+    const last = toISODate(new Date(y, m, 0));
+    const income = monthlyIncome + temporaryBetween(first, last, 'ingreso');
+    const expense = monthlyExpense + temporaryBetween(first, last, 'gasto');
+    balance += income - expense;
+    out.push({ month, income, expense, balance });
   }
   return { monthlyIncome, monthlyExpense, rows: out, startBalance: netWorthMXN() };
 }

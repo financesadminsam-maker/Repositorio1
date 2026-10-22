@@ -96,6 +96,8 @@ export function subscribe(fn) {
 export const getSettings = () => data.settings;
 export const list = (kind) => data[kind].filter((x) => !x.deleted);
 export const get = (kind, id) => data[kind].find((x) => x.id === id && !x.deleted);
+// Incluye los eliminados: sirve para no volver a crear algo que el usuario borró.
+export const exists = (kind, id) => data[kind].some((x) => x.id === id);
 
 // ---------- Escritura ----------
 

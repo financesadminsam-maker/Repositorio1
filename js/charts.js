@@ -132,7 +132,7 @@ export function savingsPlanLine(id, plan, saved) {
       datasets: [
         ...sc.map((s) => ({
           label: s.label,
-          data: labels.map((_, i) => disp(Math.min(goal, saved + s.surplus * i))),
+          data: labels.map((_, i) => disp(Math.min(goal, saved + s.path[i]))),
           borderColor: colors[s.key],
           tension: 0,
           pointRadius: 0,

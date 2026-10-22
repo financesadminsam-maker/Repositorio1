@@ -8,7 +8,7 @@ Página web personal para llevar registro de ingresos y gastos, hacer presupuest
 - **Semana de citas**: pones cuántas citas tuviste y calcula el pago ($100 por cita, mínimo $1,500; se cambia en Ajustes).
 - **Categorías editables** con ícono, color y límite mensual (avisa al 80% y al 100%).
 - **Cuentas**: efectivo, débito, crédito, ahorro.
-- **Recurrentes**: renta, Netflix, etc. se registran solos cuando llega la fecha.
+- **Gastos fijos y pagos temporales**: renta, Netflix o comida de los gatos cada N días; pagos a plazos con número de pagos o deudas con fechas elegidas. Se registran solos y las metas descuentan cada pago en la semana en que cae.
 - **Presupuesto de compra**: cuánto ahorrar y en cuántas semanas, con tres escenarios (semana floja, promedio y buena) según tu historial.
 - **Metas de ahorro** con barra de progreso.
 - **Análisis**: resumen del mes vs. el anterior, gráficas mensuales y semanales, proyección a 6 meses.
