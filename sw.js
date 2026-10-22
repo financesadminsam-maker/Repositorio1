@@ -1,7 +1,7 @@
 // Service worker: permite abrir la app sin internet.
 // Estrategia "primero la red": siempre intenta la versión más nueva y,
 // si no hay conexión, usa la copia guardada.
-const CACHE = 'finanzas-v2';
+const CACHE = 'finanzas-v3';
 const SHELL = [
   './',
   'index.html',

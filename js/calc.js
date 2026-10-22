@@ -169,7 +169,8 @@ export function categoryAlerts(key = monthKey(today())) {
 
 // ---------- Recurrentes ----------
 
-function nextDate(date, frequency) {
+function nextDate(date, frequency, everyDays) {
+  if (frequency === 'dias') return addDays(date, Math.max(1, Number(everyDays) || 1));
   if (frequency === 'semanal') return addDays(date, 7);
   if (frequency === 'quincenal') return addDays(date, 14);
   if (frequency === 'anual') return addMonths(date, 12);
@@ -185,7 +186,7 @@ export function occurrences(rec, until) {
   while (d <= end && guard++ < 1000) {
     if (stop && d > stop) break;
     out.push(toISODate(d));
-    d = nextDate(d, rec.frequency);
+    d = nextDate(d, rec.frequency, rec.everyDays);
   }
   return out;
 }
@@ -219,11 +220,12 @@ export function generateRecurring() {
 
 // Monto mensual equivalente de los recurrentes de un tipo.
 export function recurringMonthlyMXN(type) {
-  const factor = { semanal: 52 / 12, quincenal: 26 / 12, mensual: 1, anual: 1 / 12 };
+  const factor = (r) =>
+    r.frequency === 'dias' ? 365 / 12 / Math.max(1, Number(r.everyDays) || 1) : { semanal: 52 / 12, quincenal: 26 / 12, mensual: 1, anual: 1 / 12 }[r.frequency] || 1;
   return store
     .list('recurring')
     .filter((r) => r.active !== false && r.type === type)
-    .reduce((s, r) => s + toMXN(Number(r.amount) || 0, r.currency) * (factor[r.frequency] || 1), 0);
+    .reduce((s, r) => s + toMXN(Number(r.amount) || 0, r.currency) * factor(r), 0);
 }
 
 // ---------- Citas ----------
@@ -242,8 +244,11 @@ export function weeklyHistory(weeks = 12) {
   for (let i = weeks; i >= 1; i--) {
     const start = addDays(currentWeek, -7 * i);
     const end = addDays(start, 6);
-    const tot = totals(txInRange(toISODate(start), toISODate(end)));
-    out.push({ start: toISODate(start), ...tot });
+    const txs = txInRange(toISODate(start), toISODate(end));
+    const tot = totals(txs);
+    // Gastos que vienen de un recurrente, para no contarlos dos veces en los promedios.
+    const recurringExpense = totals(txs.filter((t) => t.recurringId)).expense;
+    out.push({ start: toISODate(start), ...tot, variableExpense: tot.expense - recurringExpense });
   }
   return out;
 }
@@ -264,8 +269,12 @@ export function weeklyStats() {
   const recurringExpenseWeekly = (recurringMonthlyMXN('gasto') * 12) / 52;
 
   const avgIncome = incomeWeeks.length ? avg(incomeWeeks, 'income') : fallbackIncome;
-  const avgExpense = hist.length ? Math.max(avg(hist, 'expense'), recurringExpenseWeekly) : recurringExpenseWeekly;
+  // Gasto semanal = promedio de gastos variables + gastos fijos (recurrentes) prorrateados por semana.
+  const avgVariableExpense = avg(hist, 'variableExpense');
+  const avgExpense = avgVariableExpense + recurringExpenseWeekly;
   return {
+    avgVariableExpense,
+    recurringExpenseWeekly,
     weeksOfData: hist.length,
     avgIncome,
     minIncome: incomeWeeks.length ? Math.min(...incomeWeeks.map((w) => w.income)) : fallbackIncome,

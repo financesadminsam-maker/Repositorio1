@@ -22,7 +22,8 @@ const NAV = [
 ];
 
 const ACCOUNT_TYPES = { efectivo: '💵 Efectivo', debito: '💳 Débito', credito: '💳 Crédito', ahorro: '🏦 Ahorro', otro: '👛 Otro' };
-const FREQ = { semanal: 'Cada semana', quincenal: 'Cada 2 semanas', mensual: 'Cada mes', anual: 'Cada año' };
+const FREQ = { dias: 'Cada cierto número de días', semanal: 'Cada semana', quincenal: 'Cada 2 semanas', mensual: 'Cada mes', anual: 'Cada año' };
+const freqLabel = (r) => (r.frequency === 'dias' ? `Cada ${Number(r.everyDays) || 1} ${Number(r.everyDays) === 1 ? 'día' : 'días'}` : FREQ[r.frequency]);
 const COLORS = ['#f97316', '#facc15', '#a3e635', '#4ade80', '#34d399', '#22d3ee', '#38bdf8', '#60a5fa', '#818cf8', '#a78bfa', '#e879f9', '#f472b6', '#fb7185', '#94a3b8'];
 
 const cat = (id) => store.get('categories', id) || { name: 'Sin categoría', icon: '❔', color: '#64748b' };
@@ -358,6 +359,8 @@ function viewMetas() {
       <div id="plan-result" style="margin-top:16px"></div>
     </div>
 
+    ${fixedExpensesCard()}
+
     <div class="section-title"><h2>🎯 Mis metas</h2><button class="btn btn-sm btn-primary" data-action="new-goal">＋ Nueva meta</button></div>
     ${active.length ? `<div class="grid grid-2">${active.map(goalCard).join('')}</div>` : `<div class="card">${emptyState('🎯', 'Aún no tienes metas. Usa la calculadora de arriba y conviértela en meta.')}</div>`}
     ${
@@ -370,6 +373,26 @@ function viewMetas() {
             )
             .join('')}</div></div>`
         : ''
+    }
+  </div>`;
+}
+
+// Gastos fijos (recurrentes) que se descuentan en los cálculos de metas y compras.
+function fixedExpensesCard() {
+  const recs = store.list('recurring').filter((r) => r.type === 'gasto');
+  const weekly = (calc.recurringMonthlyMXN('gasto') * 12) / 52;
+  return `<div class="card">
+    <div class="card-head"><div><h2>🔄 Mis gastos fijos</h2><div class="small muted">Se descuentan solos en los cálculos de arriba${recs.length ? `: ${fmt(weekly)} por semana en total` : ''}.</div></div><button class="btn btn-sm" data-action="new-recurring">＋ Agregar</button></div>
+    ${
+      recs.length
+        ? `<div class="list">${recs
+            .map(
+              (r) => `<button class="list-item" data-action="edit-recurring" data-id="${r.id}"><span class="cat-ico" style="background:${soft(cat(r.categoryId).color)}">${cat(r.categoryId).icon}</span><span class="grow"><div class="li-title">${esc(
+                r.name
+              )}${r.active === false ? ' <span class="chip">pausado</span>' : ''}</div><div class="li-sub">${freqLabel(r)}</div></span><span class="li-amount expense">${calc.money(Number(r.amount), { currency: r.currency })}</span></button>`
+            )
+            .join('')}</div>`
+        : emptyState('🐱', 'Agrega lo que pagas seguido, como la comida de los gatos ($80 cada 5 días), Netflix o la renta.')
     }
   </div>`;
 }
@@ -424,7 +447,9 @@ function renderPlanResult() {
     <div class="chart-box" style="margin-top:14px"><canvas id="ch-plan"></canvas></div>
     <div class="tiny muted" style="margin-top:8px">Cálculo con ${
       st.weeksOfData ? `tus últimas ${st.weeksOfData} semanas registradas` : 'tu mínimo semanal (aún no hay historial)'
-    }: ingreso promedio ${fmt(st.avgIncome)}/sem y gasto promedio ${fmt(st.avgExpense)}/sem. Mientras más registres, más preciso será.</div>
+    }: ingreso promedio ${fmt(st.avgIncome)}/sem y gasto de ${fmt(st.avgExpense)}/sem (${fmt(st.avgVariableExpense)} de gastos del día a día + ${fmt(
+      st.recurringExpenseWeekly
+    )} de gastos fijos). Mientras más registres, más preciso será.</div>
     <div class="row" style="margin-top:12px"><button class="btn btn-primary" data-action="plan-to-goal">🎯 Convertir en meta</button></div>`;
   charts.savingsPlanLine('ch-plan', plan, saved);
 }
@@ -606,7 +631,7 @@ function viewAjustes() {
               .map(
                 (r) => `<button class="list-item" data-action="edit-recurring" data-id="${r.id}"><span class="cat-ico" style="background:${soft(cat(r.categoryId).color)}">${cat(r.categoryId).icon}</span><span class="grow"><div class="li-title">${esc(
                   r.name
-                )}${r.active === false ? ' <span class="chip">pausado</span>' : ''}</div><div class="li-sub">${FREQ[r.frequency]} · desde ${calc.formatDate(r.startDate)}</div></span><span class="li-amount ${
+                )}${r.active === false ? ' <span class="chip">pausado</span>' : ''}</div><div class="li-sub">${freqLabel(r)} · desde ${calc.formatDate(r.startDate)}</div></span><span class="li-amount ${
                   r.type === 'ingreso' ? 'income' : 'expense'
                 }">${calc.money(Number(r.amount), { currency: r.currency })}</span></button>`
               )
@@ -681,7 +706,8 @@ function txModal(tx = null, preset = {}) {
             ? ''
             : `<label class="field full"><span>¿Se repite?</span><select class="input" id="f-repeat"><option value="">No, solo esta vez</option>${Object.entries(FREQ)
                 .map(([k, v]) => `<option value="${k}">${v}</option>`)
-                .join('')}</select></label>`
+                .join('')}</select></label>
+              <label class="field full hidden" id="f-days-wrap"><span>¿Cada cuántos días?</span><input class="input" id="f-days" type="number" inputmode="numeric" min="1" value="5" /></label>`
         }
       </div>
     </div>
@@ -702,6 +728,7 @@ function txModal(tx = null, preset = {}) {
           .join('')}<button type="button" class="cat-option" data-newcat><span class="e">＋</span>Nueva</button></div>`;
       };
       renderCats();
+      $('#f-repeat', root)?.addEventListener('change', (e) => $('#f-days-wrap', root).classList.toggle('hidden', e.target.value !== 'dias'));
       $$('.type-switch button', root).forEach((b) =>
         b.addEventListener('click', () => {
           t.type = b.dataset.type;
@@ -756,13 +783,13 @@ function txModal(tx = null, preset = {}) {
             categoryId: item.categoryId,
             accountId: item.accountId,
             frequency: repeat,
+            everyDays: repeat === 'dias' ? Math.max(1, Number($('#f-days', root).value) || 1) : undefined,
             startDate: item.date,
             active: true,
           });
           calc.generateRecurring();
-          if (item.date > today()) toast(`Programado: se registrará solo ${FREQ[repeat].toLowerCase()}`);
+          if (item.date > today()) toast(`Programado: se registrará solo ${freqLabel(rec).toLowerCase()}`);
           else afterSaveTx(item);
-          void rec;
         } else {
           store.save('transactions', item);
           afterSaveTx(item);
@@ -932,12 +959,13 @@ function recurringModal(r = null) {
   renderModal(
     `<div class="modal-head"><h2>${r ? 'Editar recurrente' : 'Nuevo recurrente'}</h2><button class="icon-btn" data-close>✕</button></div>
     <div class="form-grid">
-      <label class="field full"><span>Nombre</span><input class="input" id="r-name" value="${esc(item.name)}" placeholder="Ej. Netflix, renta, plan de celular" /></label>
+      <label class="field full"><span>Nombre</span><input class="input" id="r-name" value="${esc(item.name)}" placeholder="Ej. Comida de los gatos, Netflix, renta" /></label>
       <label class="field"><span>Tipo</span><select class="input" id="r-type"><option value="gasto" ${item.type === 'gasto' ? 'selected' : ''}>Gasto</option><option value="ingreso" ${item.type === 'ingreso' ? 'selected' : ''}>Ingreso</option></select></label>
       <label class="field"><span>Categoría</span><select class="input" id="r-cat">${catOptions(item.type)}</select></label>
       <label class="field"><span>Monto</span><input class="input" id="r-amount" type="number" step="0.01" min="0" value="${item.amount}" /></label>
       <label class="field"><span>Moneda</span><select class="input" id="r-currency"><option ${item.currency === 'MXN' ? 'selected' : ''}>MXN</option><option ${item.currency === 'USD' ? 'selected' : ''}>USD</option></select></label>
       <label class="field"><span>Frecuencia</span><select class="input" id="r-freq">${Object.entries(FREQ).map(([k, v]) => `<option value="${k}" ${item.frequency === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label class="field ${item.frequency === 'dias' ? '' : 'hidden'}" id="r-days-wrap"><span>¿Cada cuántos días?</span><input class="input" id="r-days" type="number" inputmode="numeric" min="1" value="${Number(item.everyDays) || 5}" /></label>
       <label class="field"><span>Cuenta</span><select class="input" id="r-account">${accounts.map((a) => `<option value="${a.id}" ${item.accountId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}</select></label>
       <label class="field"><span>Primera fecha</span><input class="input" id="r-start" type="date" value="${item.startDate}" ${r?.lastGenerated ? 'disabled' : ''} /></label>
       <label class="field"><span>Estado</span><select class="input" id="r-active"><option value="1" ${item.active !== false ? 'selected' : ''}>Activo</option><option value="0" ${item.active === false ? 'selected' : ''}>Pausado</option></select></label>
@@ -946,6 +974,7 @@ function recurringModal(r = null) {
     <div class="modal-actions">${r ? `<button class="btn btn-danger" id="r-delete">Eliminar</button>` : ''}<button class="btn btn-primary" id="r-save">Guardar</button></div>`,
     (root) => {
       $('#r-type', root).onchange = (e) => ($('#r-cat', root).innerHTML = catOptions(e.target.value));
+      $('#r-freq', root).onchange = (e) => $('#r-days-wrap', root).classList.toggle('hidden', e.target.value !== 'dias');
       $('#r-delete', root)?.addEventListener('click', () => {
         if (confirm('¿Eliminar este recurrente? Los movimientos ya registrados se conservan.')) {
           store.remove('recurring', r.id);
@@ -964,6 +993,7 @@ function recurringModal(r = null) {
           categoryId: $('#r-cat', root).value,
           currency: $('#r-currency', root).value,
           frequency: $('#r-freq', root).value,
+          everyDays: $('#r-freq', root).value === 'dias' ? Math.max(1, Number($('#r-days', root).value) || 1) : undefined,
           accountId: $('#r-account', root).value,
           startDate: $('#r-start', root).value || today(),
           active: $('#r-active', root).value === '1',
