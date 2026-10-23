@@ -11,6 +11,7 @@ const state = {
   view: 'inicio',
   month: monthKey(today()),
   txFilter: { type: 'todos', categoryId: '', q: '' },
+  range: '3M',
   plan: { name: 'Memoria RAM', price: 1600, currency: 'MXN', saved: 0, weeks: '' },
 };
 
@@ -64,6 +65,7 @@ function renderNav() {
   $$('[data-action="currency"]').forEach((b) => b.classList.toggle('active', b.dataset.currency === cur));
 
   const sync = store.syncState;
+  renderTicker();
   $('#sync-pill-side').innerHTML = `<span class="sync-dot ${sync.status}"></span><span>${esc(sync.message)}</span>`;
 }
 
@@ -171,25 +173,14 @@ function viewInicio() {
         : ''
     }
     ${alertsBlock()}
-    <div class="grid grid-2">
-      <div class="card hero">
-        <div class="muted small">Dinero total en tus cuentas</div>
-        <div class="value ${net < 0 ? 'expense' : ''}">${fmt(net)}</div>
-        <div class="small muted" style="margin-top:4px">Apartado en metas: ${fmt(reserved)} · Libre: <b class="${net - reserved < 0 ? 'expense' : ''}">${fmt(net - reserved)}</b></div>
-        <div class="row wrap" style="margin-top:14px">
-          <button class="btn btn-primary" data-action="citas">🧠 Registrar semana de citas</button>
-          <button class="btn" data-action="new-tx" data-type="gasto">− Gasto</button>
-          <button class="btn" data-action="new-tx" data-type="ingreso">＋ Ingreso</button>
-        </div>
-      </div>
-      <div class="kpis" style="grid-template-columns:repeat(2,1fr)">
-        <div class="card kpi"><div class="label">Ingresos del mes</div><div class="value income">${fmt(tot.income)}</div><div class="sub">${deltaText(tot.income, summary.prev.income)}</div></div>
-        <div class="card kpi"><div class="label">Gastos del mes</div><div class="value expense">${fmt(tot.expense)}</div><div class="sub">${deltaText(tot.expense, summary.prev.expense)}</div></div>
-        <div class="card kpi"><div class="label">Balance del mes</div><div class="value ${tot.net < 0 ? 'expense' : ''}">${fmt(tot.net)}</div><div class="sub">${
-          summary.savingsRate != null ? `Ahorras ${Math.round(summary.savingsRate * 100)}% de lo que ganas` : 'Sin ingresos aún'
-        }</div></div>
-        <div class="card kpi"><div class="label">Gasto por día</div><div class="value">${fmt(summary.dailyExpense)}</div><div class="sub">${isCurrentMonth() ? 'en lo que va del mes' : 'promedio del mes'}</div></div>
-      </div>
+    ${heroPanel(net, reserved)}
+    <div class="kpis">
+      <div class="card kpi"><div class="label">Ingresos del mes</div><div class="value income">${fmt(tot.income)}</div><div class="sub">${deltaBadge(tot.income, summary.prev.income)} vs. mes anterior</div><div class="spark"><canvas id="sp-inc"></canvas></div></div>
+      <div class="card kpi"><div class="label">Gastos del mes</div><div class="value expense">${fmt(tot.expense)}</div><div class="sub">${deltaBadge(tot.expense, summary.prev.expense, true)} vs. mes anterior</div><div class="spark"><canvas id="sp-exp"></canvas></div></div>
+      <div class="card kpi"><div class="label">Balance del mes</div><div class="value ${tot.net < 0 ? 'expense' : ''}">${fmt(tot.net, { sign: true })}</div><div class="sub">${
+        summary.savingsRate != null ? `Ahorras <b class="num">${Math.round(summary.savingsRate * 100)}%</b> de lo que ganas` : 'Sin ingresos aún'
+      }</div><div class="spark"><canvas id="sp-net"></canvas></div></div>
+      <div class="card kpi"><div class="label">Gasto por día</div><div class="value">${fmt(summary.dailyExpense)}</div><div class="sub">${isCurrentMonth() ? 'en lo que va del mes' : 'promedio del mes'}</div><div class="spark"><canvas id="sp-day"></canvas></div></div>
     </div>
 
     <div class="grid grid-2">
@@ -259,12 +250,94 @@ function viewInicio() {
 afterRender.inicio = () => {
   const cats = calc.byCategory(calc.txInMonth(state.month));
   if (cats.length) charts.categoryDonut('ch-donut', cats);
+  charts.equityChart('ch-equity', equitySeries());
+  const wk = calc.weeklyHistory(12);
+  charts.sparkline('sp-inc', wk.map((w) => w.income), getComputedStyle(document.documentElement).getPropertyValue('--income').trim());
+  charts.sparkline('sp-exp', wk.map((w) => w.expense), getComputedStyle(document.documentElement).getPropertyValue('--expense').trim());
+  charts.sparkline('sp-net', wk.map((w) => w.net));
+  const days = calc.dailyBalance(calc.toISODate(calc.addDays(new Date(), -29)));
+  charts.sparkline('sp-day', days.map((d) => Math.max(0, -d.net)), getComputedStyle(document.documentElement).getPropertyValue('--gold').trim());
 };
 
-function deltaText(cur, prev) {
-  if (!prev) return 'vs. mes anterior: —';
-  const d = (cur - prev) / prev;
-  return `${d >= 0 ? '▲' : '▼'} ${Math.abs(Math.round(d * 100))}% vs. mes anterior`;
+// ---------- Panel principal estilo cotización ----------
+
+const RANGES = { '1S': 7, '1M': 30, '3M': 91, '6M': 182, '1A': 365, TODO: null };
+
+function equitySeries() {
+  const days = RANGES[state.range];
+  const first = calc.firstTxDate() || today();
+  let from = days ? calc.toISODate(calc.addDays(new Date(), -(days - 1))) : first;
+  if (!days && from > today()) from = today();
+  return calc.dailyBalance(from);
+}
+
+function deltaBadge(cur, prev, inverse = false) {
+  if (!prev) return `<span class="badge flat">—</span>`;
+  const d = (cur - prev) / Math.abs(prev);
+  const good = inverse ? d <= 0 : d >= 0;
+  return `<span class="badge ${good ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'} ${Math.abs(d * 100).toFixed(1)}%</span>`;
+}
+
+function heroPanel(net, reserved) {
+  const series = equitySeries();
+  const open = series[0]?.balance ?? net;
+  const ch = net - open;
+  const pct = open ? (ch / Math.abs(open)) * 100 : 0;
+  const hi = Math.max(...series.map((d) => d.balance), net);
+  const lo = Math.min(...series.map((d) => d.balance), net);
+  const cls = ch > 0 ? 'up' : ch < 0 ? 'dn' : 'flat';
+  const rangeLabel = { '1S': 'última semana', '1M': 'último mes', '3M': 'últimos 3 meses', '6M': 'últimos 6 meses', '1A': 'último año', TODO: 'desde el inicio' }[state.range];
+  return `<div class="card hero">
+    <div class="quote-head">
+      <div>
+        <div class="quote-sym"><span class="live"></span>Saldo total · ${store.getSettings().displayCurrency}</div>
+        <div class="value ${net < 0 ? 'expense' : ''}">${fmt(net)}</div>
+        <div class="quote-change"><span class="badge ${cls}">${ch >= 0 ? '▲' : '▼'} ${fmt(Math.abs(ch))}${open ? ` (${Math.abs(pct).toFixed(1)}%)` : ''}</span><span class="muted">${rangeLabel}</span></div>
+      </div>
+      <div class="range-tabs" role="group" aria-label="Rango">${Object.keys(RANGES)
+        .map((r) => `<button data-action="range" data-range="${r}" class="${state.range === r ? 'active' : ''}">${r}</button>`)
+        .join('')}</div>
+    </div>
+    <div class="equity-box"><canvas id="ch-equity"></canvas></div>
+    <div class="stat-row">
+      <div><div class="k">Libre</div><div class="v ${net - reserved < 0 ? 'expense' : ''}">${fmt(net - reserved)}</div></div>
+      <div><div class="k">En metas</div><div class="v">${fmt(reserved)}</div></div>
+      <div><div class="k">Máximo</div><div class="v income">${fmt(hi)}</div></div>
+      <div><div class="k">Mínimo</div><div class="v expense">${fmt(lo)}</div></div>
+    </div>
+    <div class="order-row">
+      <button class="btn btn-gold" data-action="citas">🧠 Semana de citas</button>
+      <button class="btn btn-buy" data-action="new-tx" data-type="ingreso">＋ Ingreso</button>
+      <button class="btn btn-sell" data-action="new-tx" data-type="gasto">− Gasto</button>
+    </div>
+  </div>`;
+}
+
+// ---------- Cinta de indicadores ----------
+
+function renderTicker() {
+  const el = $('#ticker');
+  if (!el) return;
+  const key = monthKey(today());
+  const s = calc.monthSummary(key);
+  const net = calc.netWorthMXN();
+  const chg = (cur, prev, inverse) => {
+    if (!prev) return `<span class="muted">—</span>`;
+    const d = ((cur - prev) / Math.abs(prev)) * 100;
+    const good = inverse ? d <= 0 : d >= 0;
+    return `<span class="${good ? 'up' : 'dn'}">${d >= 0 ? '▲' : '▼'}${Math.abs(d).toFixed(1)}%</span>`;
+  };
+  const items = [
+    ['SALDO', fmt(net), ''],
+    ['LIBRE', fmt(net - calc.totalReservedMXN()), ''],
+    ['ING/MES', fmt(s.income), chg(s.income, s.prev.income)],
+    ['GAS/MES', fmt(s.expense), chg(s.expense, s.prev.expense, true)],
+    ['AHORRO', s.savingsRate != null ? `${Math.round(s.savingsRate * 100)}%` : '—', ''],
+    ['USD/MXN', `$${Number(store.getSettings().usdRate).toFixed(2)}`, ''],
+    ...s.changes.slice(0, 6).map((c) => [c.category.name.toUpperCase().slice(0, 14), fmt(c.total), chg(c.total, c.prev, true)]),
+  ];
+  const html = items.map(([k, v, d]) => `<span class="tk"><span class="sym">${esc(k)}</span><span class="px">${v}</span>${d}</span>`).join('');
+  el.innerHTML = `<div class="ticker-track">${html}${html}</div>`;
 }
 
 function upcomingRecurring(days) {
@@ -526,6 +599,12 @@ function viewAnalisis() {
       </div>
     </div>
 
+    <div class="card">
+      <div class="card-head"><div><h2>🕯️ Saldo semanal · velas</h2><div class="small muted">Cada vela es una semana: abre con lo que tenías el lunes y cierra con lo que tenías el domingo. Verde si subió, rojo si bajó.</div></div></div>
+      <div class="legend-inline" style="margin-bottom:6px"><span><i style="background:var(--income)"></i>Semana al alza</span><span><i style="background:var(--expense)"></i>Semana a la baja</span><span><i style="background:var(--gold)"></i>Promedio 4 semanas</span><span><i style="background:var(--muted);opacity:.4"></i>Volumen (entradas + salidas)</span></div>
+      <div class="chart-box xl"><canvas id="ch-candles"></canvas></div>
+    </div>
+
     <div class="grid grid-2">
       <div class="card"><div class="card-head"><h2>Ingresos vs. gastos (6 meses)</h2></div><div class="chart-box"><canvas id="ch-months"></canvas></div></div>
       <div class="card"><div class="card-head"><h2>Por semana (12 semanas)</h2></div><div class="chart-box"><canvas id="ch-weeks"></canvas></div></div>
@@ -570,6 +649,7 @@ function viewAnalisis() {
 afterRender.analisis = () => {
   const hist = calc.monthlyHistory(6, state.month);
   charts.incomeExpenseBars('ch-months', hist);
+  charts.candleChart('ch-candles', calc.weeklyCandles(window.innerWidth < 700 ? 12 : 20));
   charts.weeklyIncomeLine('ch-weeks', calc.weeklyHistory(12));
   charts.projectionLine('ch-proj', calc.monthlyHistory(4), calc.projection(6));
   const cats = calc.byCategory(calc.txInMonth(state.month));
@@ -1359,6 +1439,7 @@ const actions = {
     render();
     window.scrollTo({ top: 0 });
   },
+  range: (el) => ((state.range = el.dataset.range), render()),
   'month-prev': () => ((state.month = calc.shiftMonthKey(state.month, -1)), render()),
   'month-next': () => ((state.month = calc.shiftMonthKey(state.month, 1)), render()),
   'month-today': () => ((state.month = monthKey(today())), render()),
@@ -1368,7 +1449,7 @@ const actions = {
     try {
       localStorage.setItem('finanzas.theme', el.dataset.theme);
     } catch (e) {}
-    document.querySelector('meta[name="theme-color"]').content = el.dataset.theme === 'light' ? '#f4f5f8' : '#0f1115';
+    document.querySelector('meta[name="theme-color"]').content = el.dataset.theme === 'light' ? '#f3f5f8' : '#07090d';
     render();
   },
   'new-tx': (el) => txModal(null, { type: el.dataset.type }),

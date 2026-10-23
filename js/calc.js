@@ -402,6 +402,11 @@ export function projection(months = 6) {
   const monthlyExpense = st.avgExpense * weeksPerMonth;
   const start = monthKey(today());
   let balance = netWorthMXN();
+  // Banda: escenario de semanas flojas y de semanas buenas.
+  const lowIncome = Math.min(st.minIncome, st.avgIncome) * weeksPerMonth;
+  const highIncome = Math.max(st.maxIncome, st.avgIncome) * weeksPerMonth;
+  let low = balance;
+  let high = balance;
   const out = [];
   for (let i = 1; i <= months; i++) {
     const month = shiftMonthKey(start, i);
@@ -410,10 +415,50 @@ export function projection(months = 6) {
     const last = toISODate(new Date(y, m, 0));
     const income = monthlyIncome + temporaryBetween(first, last, 'ingreso');
     const expense = monthlyExpense + temporaryBetween(first, last, 'gasto');
+    const temp = income - monthlyIncome;
     balance += income - expense;
-    out.push({ month, income, expense, balance });
+    low += lowIncome + temp - expense;
+    high += highIncome + temp - expense;
+    out.push({ month, income, expense, balance, low, high });
   }
   return { monthlyIncome, monthlyExpense, rows: out, startBalance: netWorthMXN() };
+}
+
+// Saldo total (todas las cuentas) al cierre de cada día, desde `from` hasta hoy.
+export function dailyBalance(from) {
+  const t = today();
+  const txs = store.list('transactions').filter((x) => x.date <= t && x.type !== 'transferencia');
+  const netByDay = new Map();
+  for (const x of txs) netByDay.set(x.date, (netByDay.get(x.date) || 0) + (x.type === 'ingreso' ? 1 : -1) * amountMXN(x));
+  // Hacia atrás desde el saldo de hoy.
+  const out = [];
+  let bal = netWorthMXN();
+  for (let d = parseDate(t); toISODate(d) >= from; d = addDays(d, -1)) {
+    const iso = toISODate(d);
+    out.push({ date: iso, balance: bal, net: netByDay.get(iso) || 0 });
+    bal -= netByDay.get(iso) || 0;
+  }
+  return out.reverse();
+}
+
+// Velas semanales del saldo: apertura, máximo, mínimo y cierre de cada semana.
+export function weeklyCandles(weeks = 16) {
+  const start = addDays(weekStart(new Date()), -7 * (weeks - 1));
+  const days = dailyBalance(toISODate(addDays(start, -1)));
+  const out = [];
+  for (let i = 0; i < weeks; i++) {
+    const ws = toISODate(addDays(start, 7 * i));
+    const we = toISODate(addDays(start, 7 * i + 6));
+    const inWeek = days.filter((d) => d.date >= ws && d.date <= we);
+    if (!inWeek.length) continue;
+    const prev = days.filter((d) => d.date < ws).pop();
+    const open = prev ? prev.balance : inWeek[0].balance - inWeek[0].net;
+    const values = [open, ...inWeek.map((d) => d.balance)];
+    const tw = txInRange(ws, we);
+    const tot = totals(tw);
+    out.push({ start: ws, open, close: inWeek[inWeek.length - 1].balance, high: Math.max(...values), low: Math.min(...values), income: tot.income, expense: tot.expense });
+  }
+  return out;
 }
 
 // Ingresos y gastos de los últimos `n` meses (incluye el actual).

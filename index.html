@@ -5,13 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Mis Finanzas</title>
     <meta name="description" content="Registro personal de ingresos, gastos, metas y presupuestos." />
-    <meta name="theme-color" content="#0f1115" />
+    <meta name="theme-color" content="#07090d" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Finanzas" />
     <link rel="manifest" href="manifest.webmanifest" />
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="icons/icon-192.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" />
     <link rel="stylesheet" href="css/styles.css" />
     <script>
       try {
@@ -44,6 +47,7 @@
             <button class="icon-btn mobile-only" data-action="go" data-view="ajustes" aria-label="Ajustes">⚙︎</button>
           </div>
         </header>
+        <div class="ticker" id="ticker" aria-label="Indicadores"></div>
         <main id="view" class="view"></main>
       </div>
 
